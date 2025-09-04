@@ -1,0 +1,165 @@
+"R Script for the analysis of SCA target proteins in plasma samples separately in PRO and CTR.
+Output: Heatmap"
+
+load libraries
+```{r}
+install.packages("readxl") 
+library(readxl)
+install.packages("dplyr") 
+library(dplyr)
+library(pheatmap)
+library(grid)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("clusterProfiler")
+BiocManager::install("org.Hs.eg.db")
+library(clusterProfiler)
+library(org.Hs.eg.db)
+```
+Load data from excel
+```{r}
+data <- read_xlsx("/Users/majaewen/Documents/Uni/6_Semester/Daten/Proteomics/ProteinData_with_pValues_Renamed.xlsx")
+head(data)
+```
+
+```{r}
+data_skipped_PRO <- data[seq(2, nrow(data), by = 2), ] 
+data_skipped_CTR <- data[seq(1, nrow(data), by = 2), ]
+
+data_CTR <- data_skipped_CTR %>% select(-starts_with("Profi")) 
+data_CTR <- subset(data_CTR, select = -c(p.adj, p, Group, ID, Protein_name))
+data_PRO <- data_skipped_PRO %>% select(-starts_with("Control"))
+data_PRO <- subset(data_PRO, select = -c(p.adj, p, Group, ID, Protein_name))
+
+head(data_CTR)
+head(data_PRO)
+```
+###CTR###
+###CTR###
+###CTR###
+
+filter for secretory autophagy targets
+```{r}
+SA_targets <- c("MMP9","LYZ", "CTSD", "CTSB", "HEXA", "HNRNPH2","CDC42", "CFL1", "GRN", "HEXB", "TGM2", "PLEK", "SCPEP1", "DPP7", "CORO1A", "EEF1A1", "MSN", "EHD4", "RPL12", "MMP19") #add SA targets: Lysozyme C, Cathepsine, beta-hexosaminidase subunit alpha, Heterogenous nuclear ribonucleoprotein H2, cell division control protein 42 homolog, Cofilin 1, Granulin, beta hexosaminidase subunit beta, Protein glutamine gamma glutamyltransferase 2, Pleckstrin, serine carboxypeptidase, Dipeptidyl peptidase 2, Coronin 1A, Elongation Factor 1 alpha 1, Moesin, EH domain containing 4, 60S ribosomal protein L12
+data_SA_targets_CTR <- data_CTR %>% filter( Gene_name %in% SA_targets)
+print(data_SA_targets_CTR)
+```
+
+```{r}
+data_CTR_df <- as.data.frame(data_SA_targets_CTR) 
+rownames(data_CTR_df) <- data_CTR_df$Gene_name
+data_SA_targets_CTR_matrix <- data_CTR_df[, -which(names(data_CTR_df) == "Gene_name")] 
+```
+
+plot heatmap sorted by timepoints
+```{r}
+timepoints_CTR <- sapply(strsplit(colnames(data_SA_targets_CTR_matrix), "_"), `[`, 3)
+sorted_cols_CTR <- colnames(data_SA_targets_CTR_matrix)[order(timepoints_CTR)] 
+data_SA_sorted_CTR <- data_SA_targets_CTR_matrix[, sorted_cols_CTR]
+annotation_col_CTR <- data.frame(Timepoint = timepoints_CTR)
+rownames(annotation_col_CTR) <- colnames(data_SA_targets_CTR_matrix)
+
+ann_colors <- list(
+  Timepoint = c(
+    T0 = "#1f78b4", 
+    T1 = "#33a02c",  
+    T2 = "#e31a1c" ,
+    T3 = "yellow",
+    T4 = "purple"
+  )
+)
+
+pheatmap(data_SA_sorted_CTR,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         fontsize_col = 6,
+         annotation_col = annotation_col_CTR,  
+         annotation_colors = ann_colors, 
+         scale = "row",  
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+         main = "Secretory autophagy targets in acute exercise")
+```
+calculate mean 
+```{r}
+timepoints <- c("T0", "T1", "T2", "T3", "T4") 
+
+mean_timepoints_CTR <- sapply(timepoints, function(tp){
+  cols_CTR <- grep(tp, colnames(data_SA_sorted_CTR), value = TRUE)
+  rowMeans(data_SA_sorted_CTR[, cols_CTR, drop = FALSE], na.rm = TRUE)})
+
+mean_timepoints_CTR <- as.data.frame(mean_timepoints_CTR)
+rownames(mean_timepoints_CTR) <- rownames(data_SA_sorted_CTR)
+
+pheatmap(mean_timepoints_CTR,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         fontsize_col = 12,
+         scale = "row",  
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+         main = "Secretory autophagy targets in acute exercise")
+```
+###PRO###
+###PRO###
+###PRO###
+
+filter for secretory autophagy targets
+```{r}
+data_SA_targets_PRO <- data_PRO %>% filter( Gene_name %in% SA_targets)
+print(data_SA_targets_PRO)
+```
+
+prepare matrix for heatmap
+```{r}
+data_PRO_df <- as.data.frame(data_SA_targets_PRO) 
+rownames(data_PRO_df) <- data_PRO_df$Gene_name
+data_SA_targets_PRO_matrix <- data_PRO_df[, -which(names(data_PRO_df) == "Gene_name")] 
+```
+ 
+plot heatmap sorted by timepoints
+```{r}
+timepoints_PRO <- sapply(strsplit(colnames(data_SA_targets_PRO_matrix), "_"), `[`, 3)
+sorted_cols_PRO <- colnames(data_SA_targets_PRO_matrix)[order(timepoints_PRO)] 
+data_SA_sorted_PRO <- data_SA_targets_PRO_matrix[, sorted_cols_PRO]
+annotation_col_PRO <- data.frame(Timepoint = timepoints_PRO)
+rownames(annotation_col_PRO) <- colnames(data_SA_targets_PRO_matrix)
+ann_colors <- list(
+  Timepoint = c(
+    T0 = "#1f78b4", 
+    T1 = "#33a02c",  
+    T2 = "#e31a1c" ,
+    T3 = "yellow",
+    T4 = "purple"
+  )
+)
+
+
+pheatmap(data_SA_sorted_PRO,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         fontsize_col = 6,
+         annotation_col = annotation_col_PRO,  
+         annotation_colors = ann_colors, 
+         scale = "row",  
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+         main = "Secretory autophagy targets in acute exercise")
+```
+
+calculate mean 
+```{r}
+timepoints <- c("T0", "T1", "T2", "T3", "T4") 
+
+mean_timepoints_PRO <- sapply(timepoints, function(tp){
+  cols_PRO <- grep(tp, colnames(data_SA_sorted_PRO), value = TRUE)
+  rowMeans(data_SA_sorted_PRO[, cols_PRO, drop = FALSE], na.rm = TRUE)})
+
+mean_timepoints_PRO <- as.data.frame(mean_timepoints_PRO)
+rownames(mean_timepoints_PRO) <- rownames(data_SA_sorted_PRO)
+
+pheatmap(mean_timepoints_PRO,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         fontsize_col = 12,
+         scale = "row",  
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+         main = "Secretory autophagy targets in acute exercise")
+```

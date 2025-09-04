@@ -1,0 +1,62 @@
+R Script for the visualisation of the performance measure "maximum oxygen uptake" and statistical testing for group differences.
+
+load libraries
+```{r}
+install.packages("readxl") 
+library(readxl)
+install.packages("dplyr") 
+library(dplyr)
+library(ggplot2)
+install.packages("dunn.test")
+library(dunn.test)
+install.packages("ggpubr")
+library(ggpubr)
+```
+Load the data from Excel
+```{r}
+data <- read_xlsx("/Users/majaewen/Documents/Uni/6_Semester/Daten/MSSA_TableS1-mmc1_02.01.2023.xlsx", sheet = 1, skip=2) 
+head(data)
+```
+Generate Boxplot
+```{r}
+data_clean <- data %>% filter(!is.na(category))
+data_clean <- data_clean %>%
+  mutate(category = ifelse(category == "CTR", paste(category, Sex, sep = "_"), category))
+ggplot(data_clean, aes(x = category, y = Peak_VO2_mL_per_kgmin, fill = category)) +
+  geom_boxplot(outlier.shape = NA, color = "black", fill = NA, width = 0.6) +
+  geom_jitter(aes(color = category), width = 0.1, size = 2, alpha = 0.7) +
+  labs(title = "Peak oxygen uptake across study groups" , x = "", y = expression("Peak VO"[2] ~ "(mL·min"^{-1}*"·kg"^{-1}*")")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 10),
+     legend.title = element_text(size = 13),
+    legend.text = element_text(size = 12)
+    )
+ggsave("Boxplot_peak_VO2.png")
+```
+
+Add statistical testing
+```{r}
+comparison <- list(c("CTR_F", "CTR_M"), c("CTR_F", "PRO"), c("CTR_M", "PRO"))
+
+ggplot(data_clean, aes(x = category, y = Peak_VO2_mL_per_kgmin, fill = category)) +
+  geom_boxplot(outlier.shape = NA, color = "black", fill = NA, width = 0.6) +
+  geom_jitter(aes(color = category), width = 0.1, size = 2, alpha = 0.7) +
+  scale_fill_manual(values = c("PRO" = "red", "CTR_M" = "blue", "CTR_F" = "#555555")) +
+  scale_color_manual(values = c("PRO" = "red", "CTR_M" = "blue", "CTR_F" = "#555555")) +
+  
+  #stat_compare_means(method = "kruskal.test", label.y = max(data_clean$Peak_VO2_mL_per_kgmin) + 1.5) +  
+  stat_compare_means(comparisons = comparison, method = "wilcox.test", label = "p.signif", hide.ns = TRUE) + 
+  labs(title = "Peak oxygen uptake across study groups" , x = "", y = expression("Peak VO"[2] ~ "(mL·min"^{-1}*"·kg"^{-1}*")")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 10),
+     legend.title = element_text(size = 13),
+    legend.text = element_text(size = 12)
+    )
+ggsave("Boxplot_peak_VO2.png")
+```

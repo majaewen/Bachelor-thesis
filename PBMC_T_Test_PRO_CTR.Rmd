@@ -1,0 +1,397 @@
+"R Script for the statistical comparison of PRO and CTR at each time point in PBMCs.
+Output: PCA, List of significnt proteins and respective q-values, Heatmap, Lineplot"
+
+
+```{r}
+install.packages("BiocManager")
+BiocManager::install("limma")
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(limma)
+library(ggplot2)
+library(reshape2)
+install.packages("writexl")
+library(writexl)
+library(pheatmap)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+```
+
+Load data
+```{r}
+data_CTR <- read_xls("/Users/majaewen/Documents/Uni/6_Semester/Daten/PBMC_proteomics/T_test_Controls.xls", skip = 2)
+head(data_CTR)
+
+data_PRO <- read_xls("/Users/majaewen/Documents/Uni/6_Semester/Daten/PBMC_proteomics/T_test_Profis.xls", skip = 2)
+head(data_PRO)
+
+metadata <- read_xlsx("/Users/majaewen/Documents/Uni/6_Semester/Daten/Radsportprojekt_Probenübersicht_Nov2021.xlsx")
+```
+
+```{r}
+data_PRO$ID <- as.character(data_PRO[[84]])
+data_CTR$ID <- as.character(data_CTR[[84]])
+
+data_PRO1 <- data_PRO[, -c(61:85)]
+data_CTR1 <- data_CTR[, -c(61:86)]
+data_PRO1$ID <- make.unique(data_PRO1$ID)
+data_CTR1$ID <- make.unique(data_CTR1$ID)
+data_PRO1$ID[is.na(data_PRO1$ID)] <- "Group"
+data_CTR1$ID[is.na(data_CTR1$ID)] <- "Group"
+data_PRO1$ID[data_PRO1$ID == "NA.1"] <- "Participant"
+data_CTR1$ID[data_CTR1$ID == "NA.1"] <- "Participant"
+
+merged <- merge(data_PRO1, data_CTR1, by = "ID")
+merged$ID <- make.unique(merged$ID)
+
+rownames(merged) <- merged$ID
+
+merged <- merged[ , -which(colnames(merged) == "ID")]
+```
+
+
+Generate PCA 
+```{r}
+group <- as.character(unlist(merged["Group", ]))       
+participant <- as.character(unlist(merged["Participant", ]))
+
+exprs <- merged[!rownames(merged) %in% c("Group", "Participant"), ]
+exprs <- apply(exprs, 2, as.numeric)  
+rownames(exprs) <- rownames(merged)[!rownames(merged) %in% c("Group", "Participant")]
+
+timepoints <- sub("(T\\d+).*", "\\1", colnames(exprs))
+
+sample_info <- data.frame(
+  sample = colnames(exprs),
+  group = group,
+  participant = participant,
+  timepoint = timepoints
+)
+
+exprs_t <- t(exprs)
+
+# prepare pdf (if needed)
+#pdf("/Users/majaewen/Documents/Uni/6_Semester/Daten/PBMC_proteomics/PRO_CTR/PCA_je_Zeitpunkt.pdf", width = 7, height = 6)
+
+for (tp in unique(sample_info$timepoint)) {
+  cat("Bearbeite:", tp, "\n")
+    samples_tp <- sample_info$sample[sample_info$timepoint == tp]
+  
+  exprs_sub <- exprs_t[samples_tp, , drop = FALSE]
+  group_sub <- sample_info$group[sample_info$timepoint == tp]
+  participant_sub <- sample_info$participant[sample_info$timepoint == tp]
+  
+  pca_res <- prcomp(exprs_sub, scale. = TRUE)
+  
+  pca_df <- data.frame(pca_res$x[, 1:2])
+  pca_df$group <- group_sub
+  pca_df$participant <- participant_sub
+  
+  pca_df_merged <- merge(pca_df, metadata, by = "participant")
+  
+  p <- ggplot(pca_df, aes(x = PC1, y = PC2, color = group)) +
+    geom_point(size = 4) +
+    labs(title = paste("PCA für", tp), x = "PC1", y = "PC2") +
+    theme_minimal()
+  
+  print(p)
+}
+
+#dev.off()
+```
+
+One PCA for three time points
+```{r}
+pca_res <- prcomp(exprs_t, scale. = TRUE)
+
+pca_df <- data.frame(pca_res$x[, 1:2])  
+pca_df$group <- sample_info$group
+pca_df$participant <- sample_info$participant
+pca_df$timepoint <- sample_info$timepoint
+
+pca_df_sub <- subset(pca_df, timepoint %in% c("T0", "T2", "T4"))
+
+ggplot(pca_df_sub, aes(x = PC1, y = PC2, color = timepoint, shape = group)) +
+  geom_point(size = 4) +
+  labs(
+    title = "PCA nur für T0, T2 und T4",
+    x = paste0("PC1 (", round(summary(pca_res)$importance[2,1]*100, 1), "% Var.)"),
+    y = paste0("PC2 (", round(summary(pca_res)$importance[2,2]*100, 1), "% Var.)")
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 18),
+    plot.title = element_text(size = 22, face = "bold", hjust = 0.5)
+  )
+```
+
+
+```{r}
+expr <- merged
+rownames(expr) <- rownames(merged)
+expr <- merged[rownames(merged) != "Group", ]
+expr <- expr[rownames(expr) != "Participant", ]
+
+expr_mat <- apply(expr, 2, as.numeric)
+rownames(expr_mat) <- rownames(expr)
+```
+
+Collect metadata
+```{r}
+group <- as.character(merged["Group", ])
+participant <- as.character(merged["Participant", ])
+timepoint <- sub("^([Tt][0-9]+).*", "\\1", colnames(expr))
+```
+
+```{r}
+group <- factor(group)
+timepoint <- factor(timepoint)
+
+group_time <- factor(paste(group, timepoint, sep = "_"))
+design <- model.matrix(~ 0 + group_time)
+colnames(design)
+```
+
+limma analysis
+```{r}
+fit <- lmFit(expr_mat, design)
+
+contrasts <- makeContrasts(
+  T0_PRO_vs_CTR = group_timeProfi_T0 - group_timeControl_T0,  # FC > 0: protein more abundant in PRO
+  T1_PRO_vs_CTR = group_timeProfi_T1 - group_timeControl_T1,
+  T2_PRO_vs_CTR = group_timeProfi_T2 - group_timeControl_T2,
+  T3_PRO_vs_CTR = group_timeProfi_T3 - group_timeControl_T3,
+  T4_PRO_vs_CTR = group_timeProfi_T4 - group_timeControl_T4,
+  levels = design
+)
+
+
+
+fit2 <- contrasts.fit(fit, contrasts)
+fit2 <- eBayes(fit2)
+
+topTable(fit2, coef = "T2_PRO_vs_CTR", sort.by = "P")
+```
+
+Save results
+```{r}
+all_tables <- list(
+  T0 = { df <- topTable(fit2, coef = "T0_PRO_vs_CTR", number = Inf); 
+         df$ProteinID <- rownames(df); 
+         df },
+  T1 = { df <- topTable(fit2, coef = "T1_PRO_vs_CTR", number = Inf); 
+         df$ProteinID <- rownames(df); 
+         df },
+  T2 = { df <- topTable(fit2, coef = "T2_PRO_vs_CTR", number = Inf); 
+         df$ProteinID <- rownames(df); 
+         df },
+  T3 = { df <- topTable(fit2, coef = "T3_PRO_vs_CTR", number = Inf); 
+         df$ProteinID <- rownames(df); 
+         df },
+  T4 = { df <- topTable(fit2, coef = "T4_PRO_vs_CTR", number = Inf); 
+         df$ProteinID <- rownames(df); 
+         df }
+)
+write_xlsx(all_tables, path = "/Users/majaewen/Documents/Uni/6_Semester/Daten/PBMC_proteomics/PRO_CTR/limma_PROvsCTR_results.xlsx")
+```
+
+Generate heatmap containing significant proteins at T0
+```{r}
+sig_T0 <- all_tables$T0 %>%
+  filter(adj.P.Val < 0.05) %>%
+  pull(ProteinID)
+
+sig_T0_df <- data.frame(ProteinID = sig_T0)
+
+write_xlsx(sig_T0_df, "sig_T0_proteins.xlsx")
+
+logFC_long <- lapply(names(all_tables), function(tp) {
+  df <- all_tables[[tp]] %>%
+    dplyr::select(ProteinID, logFC, adj.P.Val) %>%
+    mutate(Timepoint = tp)
+  return(df)
+}) %>% bind_rows()
+
+logFC_sig <- logFC_long %>% filter(ProteinID %in% sig_T0)
+
+logFC_wide <- logFC_sig %>%
+  dplyr::select(ProteinID, Timepoint, logFC) %>%
+  pivot_wider(names_from = Timepoint, values_from = logFC)
+
+heatmap_mat <- as.matrix(logFC_wide[,-1])
+rownames(heatmap_mat) <- logFC_wide$ProteinID
+```
+
+```{r}
+pheatmap(heatmap_mat,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         main = "logFC PRO/CTR PBMCs")
+```
+
+Generate Cluster 
+```{r}
+res <- pheatmap(
+  heatmap_mat,
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  cutree_rows = 2,   
+  show_rownames = FALSE,
+  color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+  main = "Log2FC (PRO/CTR) in PBMCs"
+)
+
+clusters <- cutree(res$tree_row, k = 2)  
+cluster_df <- data.frame(ProteinID = names(clusters),
+                         Cluster = factor(clusters))
+head(cluster_df)
+
+cluster1_ids <- cluster_df$ProteinID[cluster_df$Cluster == 1]
+cluster2_ids <- cluster_df$ProteinID[cluster_df$Cluster == 2]
+```
+
+GO Analysis
+```{r}
+ego1 <- enrichGO(gene         = cluster1_ids,
+                 OrgDb        = org.Hs.eg.db,
+                 keyType      = "SYMBOL",   
+                 ont          = "BP",
+                 pAdjustMethod= "BH",
+                 pvalueCutoff = 0.05,
+                 qvalueCutoff = 0.05)
+
+ego2 <- enrichGO(gene         = cluster2_ids,
+                 OrgDb        = org.Hs.eg.db,
+                 keyType      = "SYMBOL",
+                 ont          = "BP",
+                 pAdjustMethod= "BH",
+                 pvalueCutoff = 0.05,
+                 qvalueCutoff = 0.05)
+
+dotplot(ego1, showCategory=20) + ggtitle("Cluster 1 - GO BP") #downregulated in PRO at T0
+dotplot(ego2, showCategory=20) + ggtitle("Cluster 2 - GO BP") #upregulated in PRO at T0
+```
+
+Lineplots
+```{r}
+plot_df <- heatmap_mat %>% as.data.frame() %>% tibble::rownames_to_column("ProteinID") %>% pivot_longer(-ProteinID, names_to = "Timepoint", values_to = "logFC") %>% left_join(cluster_df, by = "ProteinID")
+
+plot_cluster1 <- plot_df %>%
+  filter(ProteinID %in% cluster1_ids) %>%
+  ggplot(aes(x = Timepoint, y = logFC, group = ProteinID)) +
+  # Einzellinien grau
+  geom_line(color = "grey70", alpha = 0.4) +
+  # Mittelwert pro Cluster fett und farbig
+  stat_summary(aes(group = 1), fun = mean, geom = "line", size = 1.5, color = "navy") +
+  geom_hline(yintercept = 0, color = "black", size = 0.6) +
+  labs(title = "Cluster 1", x = " ", y = "log2FC") +
+  theme_minimal()
+
+# Cluster 2
+plot_cluster2 <- plot_df %>%
+  filter(ProteinID %in% cluster2_ids) %>%
+  ggplot(aes(x = Timepoint, y = logFC, group = ProteinID)) +
+  geom_line(color = "grey70", alpha = 0.4) +
+  stat_summary(aes(group = 1), fun = mean, geom = "line", size = 1.5, color = "firebrick3") +
+  geom_hline(yintercept = 0, color = "black", size = 0.6) +
+  labs(title = "Cluster 2", x = " ", y = "log2FC") +
+  theme_minimal()
+library(patchwork)
+plot_cluster2 / plot_cluster1
+```
+
+New heatmap with cluster
+```{r}
+row_anno <- data.frame(Cluster = cluster_df$Cluster)
+rownames(row_anno) <- cluster_df$ProteinID
+
+anno_colors <- list(
+  Cluster = c("1" = "navy", "2" = "firebrick3")
+)
+
+pheatmap(
+  heatmap_mat,
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  cutree_rows = 2,
+  show_rownames = FALSE,
+  color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+  main = "Log2FC (PRO/CTR) in PBMCs",
+  annotation_row = row_anno,
+  annotation_colors = anno_colors
+)
+```
+
+
+Repeat for T4
+```{r}
+sig_T4 <- all_tables$T4 %>%
+  filter(adj.P.Val < 0.05) %>%
+  pull(ProteinID)
+
+logFC_long4 <- lapply(names(all_tables), function(tp) {
+  df <- all_tables[[tp]] %>%
+    dplyr::select(ProteinID, logFC, adj.P.Val) %>%
+    mutate(Timepoint = tp)
+  return(df)
+}) %>% bind_rows()
+
+logFC_sig4 <- logFC_long4 %>% filter(ProteinID %in% sig_T4)
+
+logFC_wide4 <- logFC_sig4 %>%
+  dplyr::select(ProteinID, Timepoint, logFC) %>%
+  pivot_wider(names_from = Timepoint, values_from = logFC)
+
+
+heatmap_mat4 <- as.matrix(logFC_wide4[,-1])
+rownames(heatmap_mat4) <- logFC_wide4$ProteinID
+
+
+```
+
+```{r}
+pheatmap(heatmap_mat4,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         main = "logFC PRO/CTR T4")
+
+```
+
+Generate Cluster
+```{r}
+res4 <- pheatmap(
+  heatmap_mat4,
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  cutree_rows = 2,   
+)
+
+clusters4 <- cutree(res4$tree_row, k = 2)  
+cluster_df4 <- data.frame(ProteinID = names(clusters4),
+                         Cluster = clusters4)
+head(cluster_df4)
+
+cluster1_ids4 <- cluster_df4$ProteinID[cluster_df4$Cluster == 1]
+cluster2_ids4 <- cluster_df4$ProteinID[cluster_df4$Cluster == 2]
+
+ego14 <- enrichGO(gene         = cluster1_ids4,
+                 OrgDb        = org.Hs.eg.db,
+                 keyType      = "SYMBOL",   
+                 ont          = "BP",
+                 pAdjustMethod= "BH",
+                 pvalueCutoff = 0.05,
+                 qvalueCutoff = 0.05)
+
+
+ego24 <- enrichGO(gene         = cluster2_ids4,
+                 OrgDb        = org.Hs.eg.db,
+                 keyType      = "SYMBOL",
+                 ont          = "BP",
+                 pAdjustMethod= "BH",
+                 pvalueCutoff = 0.2,
+                 qvalueCutoff = 0.2)
+
+dotplot(ego14, showCategory=20) + ggtitle("Cluster 1 - GO BP") #downregulated in PRO at T4
+dotplot(ego24, showCategory=20) + ggtitle("Cluster 2 - GO BP") #upregulated at T4 (not sig. associated)
+```

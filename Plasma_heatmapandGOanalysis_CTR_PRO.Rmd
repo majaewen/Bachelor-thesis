@@ -1,0 +1,259 @@
+"R Script for the analysis of significant proteins at T2 in plasma samples separately in PRO and CTR.
+Output: Heatmap and GO analysis"
+
+load libraries
+```{r}
+install.packages("readxl") 
+library(readxl)
+install.packages("dplyr") 
+library(dplyr)
+library(pheatmap)
+library(grid)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("clusterProfiler")
+BiocManager::install("org.Hs.eg.db")
+library(clusterProfiler)
+library(org.Hs.eg.db)
+```
+
+Load data from excel
+```{r}
+data <- read_xlsx("/Users/majaewen/Documents/Uni/6_Semester/Daten/Proteomics/ProteinData_with_pValues_Renamed.xlsx")
+head(data)
+```
+```{r}
+data_skipped_PRO <- data[seq(2, nrow(data), by = 2), ] 
+data_skipped_CTR <- data[seq(1, nrow(data), by = 2), ]
+
+data_CTR <- data_skipped_CTR %>% dplyr::select(-starts_with("Profi")) 
+data_CTR <- subset(data_CTR, select = -c(p, Group, ID, Protein_name))
+data_PRO <- data_skipped_PRO %>% dplyr::select(-starts_with("Control"))
+data_PRO <- subset(data_PRO, select = -c(p, Group, ID, Protein_name))
+
+head(data_CTR)
+head(data_PRO)
+```
+###CTR###
+###CTR###
+###CTR###
+
+filter for significant proteins
+```{r}
+sig_data_CTR <- data_CTR[data_CTR$p.adj <= 0.05, ]
+print(sig_data_CTR)
+```
+```{r}
+data_CTR_df <- as.data.frame(sig_data_CTR) 
+rownames(data_CTR_df) <- data_CTR_df$Gene_name
+data_CTR_df_p <- dplyr::select(data_CTR_df, -p.adj)
+sig_data_CTR_matrix <- data_CTR_df_p[, -which(names(data_CTR_df_p) == "Gene_name")] 
+```
+
+plot heatmap sorted by timepoints
+```{r}
+timepoints_CTR <- sapply(strsplit(colnames(sig_data_CTR_matrix), "_"), `[`, 3)
+sorted_cols_CTR <- colnames(sig_data_CTR_matrix)[order(timepoints_CTR)] 
+data_sorted_CTR <- sig_data_CTR_matrix[, sorted_cols_CTR]
+annotation_col_CTR <- data.frame(Timepoint = timepoints_CTR)
+rownames(annotation_col_CTR) <- colnames(sig_data_CTR_matrix)
+
+pheat <- pheatmap(data_sorted_CTR,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         fontsize_col = 6,
+         scale = "row",  
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+         main = "Significantly regulated proteins - CTR",
+         silent = TRUE)
+
+#extract cluster
+row_dend <- pheat$tree_row
+row_clusters <- cutree(row_dend, k = 2)
+annotation_row_CTR <- data.frame(Cluster = factor(row_clusters))
+rownames(annotation_row_CTR) <- rownames(data_sorted_CTR)
+
+ann_colors <- list(
+  Timepoint = c(
+    T0 = "#deebf7",
+    T1 = "#c6dbef",
+    T2 = "#9ecae1",
+    T3 = "#6baed6",
+    T4 = "#3182bd"
+  ),
+  Cluster = c(
+    "1" = "#66C2A5",  
+    "2" = "#FFD92F"  
+  )
+)
+
+pheatmap(data_sorted_CTR,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         fontsize_col = 6,
+         annotation_col = annotation_col_CTR,  
+         annotation_row = annotation_row_CTR,
+         annotation_colors = ann_colors, 
+         show_colnames = FALSE,
+         show_rownames = FALSE,
+         breaks = seq(-3, 3, length.out = 201),
+         scale = "row",  
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(201),
+         main = "CTR")
+```
+GO Analysis
+```{r}
+genes_cluster1 <- names(row_clusters[row_clusters == 1])
+genes_cluster2 <- names(row_clusters[row_clusters == 2])
+
+GO1_CTR <- enrichGO(gene = genes_cluster1,
+                 OrgDb = org.Hs.eg.db,
+                 keyType = "SYMBOL",  
+                 ont = "BP",          
+                 pAdjustMethod = "fdr",
+                 pvalueCutoff = 0.05,
+                 readable = TRUE)
+
+p1 <- barplot(GO1_CTR, showCategory = 5, title = "Cluster 1")
+p1 + ggtitle("Cluster 1") + theme(
+  plot.title = element_text(size = 20, face = "bold"),
+  axis.text.y = element_text(size = 15),               
+  axis.text.x = element_text(size = 15),   
+  axis.title = element_text(size = 20),
+  legend.text = element_text(size = 14),  
+  legend.title = element_text(size = 16)
+)
+
+GO2_CTR <- enrichGO(gene = genes_cluster2,
+                 OrgDb = org.Hs.eg.db,
+                 keyType = "SYMBOL",  
+                 ont = "BP",          
+                 pAdjustMethod = "fdr",
+                 pvalueCutoff = 0.05,
+                 readable = TRUE)
+
+p2 <- barplot(GO2_CTR, showCategory = 5, title = "Cluster 2")
+
+p2 + ggtitle("Cluster 2") + theme(
+  plot.title = element_text(size = 20, face = "bold"),
+  axis.text.y = element_text(size = 15),               
+  axis.text.x = element_text(size = 15),   
+  axis.title = element_text(size = 20),
+  legend.text = element_text(size = 14),  
+  legend.title = element_text(size = 16)
+)
+```
+
+###PRO###
+###PRO###
+###PRO###
+
+filter for significant proteins
+```{r}
+sig_data_PRO <- data_PRO[data_PRO$p.adj <= 0.05, ]
+print(sig_data_PRO)
+```
+```{r}
+data_PRO_df <- as.data.frame(sig_data_PRO) 
+rownames(data_PRO_df) <- data_PRO_df$Gene_name
+data_PRO_df_p <- dplyr::select(data_PRO_df, -p.adj)
+sig_data_PRO_matrix <- data_PRO_df_p[, -which(names(data_PRO_df_p) == "Gene_name")] 
+```
+ 
+plot heatmap sorted by timepoints
+```{r}
+timepoints_PRO <- sapply(strsplit(colnames(sig_data_PRO_matrix), "_"), `[`, 3)
+sorted_cols_PRO <- colnames(sig_data_PRO_matrix)[order(timepoints_PRO)] 
+data_sorted_PRO <- sig_data_PRO_matrix[, sorted_cols_PRO]
+annotation_col_PRO <- data.frame(Timepoint = timepoints_PRO)
+rownames(annotation_col_PRO) <- colnames(sig_data_PRO_matrix)
+
+pheat_PRO <- pheatmap(data_sorted_PRO,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         fontsize_col = 6,
+         scale = "row",  # normalize each protein across subjects/timepoints, divides by mean, std?,
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+         main = "Significantly regulated proteins - CTR",
+         silent = TRUE)
+
+#extract cluster
+row_dend <- pheat_PRO$tree_row
+row_clusters_PRO <- cutree(row_dend, k = 3)
+annotation_row_PRO <- data.frame(Cluster = factor(row_clusters_PRO))
+rownames(annotation_row_PRO) <- rownames(data_sorted_PRO)
+
+ann_colors <- list(
+  Timepoint = c(
+    T0 = "#deebf7",
+    T1 = "#c6dbef",
+    T2 = "#9ecae1",
+    T3 = "#6baed6",
+    T4 = "#3182bd"
+  ),
+  Cluster = c(
+    "1" = "#66C2A5",  
+    "2" = "#FFD92F",
+    "3" = "#FC8D62"
+  )
+)
+
+pheatmap(data_sorted_PRO,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         fontsize_col = 6,
+         border_color = NA,
+         show_colnames = FALSE,
+         show_rownames = FALSE,
+         breaks = seq(-3, 3, length.out = 201),
+         annotation_col = annotation_col_PRO,  
+         annotation_row = annotation_row_PRO,
+         annotation_colors = ann_colors, 
+         scale = "row", 
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(201),
+         main = "PRO")
+```
+GO Analysis
+```{r}
+genes_cluster1_PRO <- names(row_clusters_PRO[row_clusters_PRO == 1])
+genes_cluster2_PRO <- names(row_clusters_PRO[row_clusters_PRO == 2])
+genes_cluster3_PRO <- names(row_clusters_PRO[row_clusters_PRO == 3])
+
+GO1_PRO <- enrichGO(gene = genes_cluster1_PRO,
+                 OrgDb = org.Hs.eg.db,
+                 keyType = "SYMBOL",  
+                 ont = "BP",          
+                 pAdjustMethod = "fdr",
+                 pvalueCutoff = 0.05,
+                 readable = TRUE)
+
+p1 <- barplot(GO1_PRO, showCategory = 5, title = "GO Enrichment – Cluster 1")
+p1 + ggtitle("Cluster 1") + theme(
+  plot.title = element_text(size = 20, face = "bold"),
+  axis.text.y = element_text(size = 15),                
+  axis.text.x = element_text(size = 15),   
+  axis.title = element_text(size = 20),
+  legend.text = element_text(size = 14),  
+  legend.title = element_text(size = 16)
+)
+
+GO2_PRO <- enrichGO(gene = genes_cluster2_PRO,
+                 OrgDb = org.Hs.eg.db,
+                 keyType = "SYMBOL",  
+                 ont = "BP",          
+                 pAdjustMethod = "fdr",
+                 pvalueCutoff = 0.05,
+                 readable = TRUE)
+
+barplot(GO2_PRO, showCategory = 5, title = "Cluster 2")
+
+GO3_PRO <- enrichGO(gene = genes_cluster3_PRO,
+                 OrgDb = org.Hs.eg.db,
+                 keyType = "SYMBOL",  
+                 ont = "BP",          
+                 pAdjustMethod = "fdr",
+                 pvalueCutoff = 0.1,
+                 readable = TRUE)
+
+barplot(GO3_PRO, showCategory = 5, title = "Cluster 3")
+```

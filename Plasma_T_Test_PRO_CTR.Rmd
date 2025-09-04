@@ -1,0 +1,174 @@
+"R Script for the statistical comparison of PRO and CTR at each time point in plasma.
+Output: PCA, List of significnt proteins and respective q-values, Heatmap, Lineplot"
+
+
+```{r}
+install.packages("BiocManager")
+BiocManager::install("limma")
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(limma)
+library(ggplot2)
+library(reshape2)
+install.packages("writexl")
+library(writexl)
+library(readr)
+```
+Load data
+```{r}
+data <- read_xlsx("/Users/majaewen/Documents/Uni/6_Semester/Daten/Proteomics/ProteinData_with_pValues_Renamed.xlsx")
+head(data)
+```
+```{r}
+expr_mat <- dplyr::select(data, starts_with("Profi_"), starts_with("Control_")) %>%
+  as.matrix()
+rownames(expr_mat) <- data$Gene_name
+mode(expr_mat) <- "numeric"
+```
+
+```{r}
+sample_info <- colnames(expr_mat)
+group <- ifelse(grepl("Profi", sample_info), "Profi", "Control")
+time <- gsub(".*_T", "T", sample_info)
+
+design_df <- data.frame(sample = sample_info, group, time)
+design_df$group_time <- paste(design_df$group, design_df$time, sep = "_")
+
+design <- model.matrix(~ 0 + group_time, data = design_df)
+colnames(design) <- gsub("group_time", "", colnames(design))
+```
+
+Generate PCA 
+```{r}
+exprs_t <- t(expr_mat)  
+
+sample_info <- data.frame(
+  sample = rownames(exprs_t),
+  group = ifelse(grepl("^Profi", rownames(exprs_t)), "PRO", "CTR"),
+  timepoint = sub(".*_T", "T", rownames(exprs_t))
+)
+
+exprs_t_df <- as.data.frame(exprs_t)
+exprs_t_df$group <- sample_info$group
+exprs_t_df$timepoint <- sample_info$timepoint
+
+unique_times <- unique(sample_info$timepoint)
+
+for (tp in unique_times) {
+  cat("Zeitpunkt:", tp, "\n")
+  
+  sub_df <- exprs_t_df[exprs_t_df$timepoint == tp, ]
+  sub_exprs <- sub_df[, !(colnames(sub_df) %in% c("group", "timepoint"))]
+  
+  pca_res <- prcomp(sub_exprs, scale. = TRUE)
+  
+  pca_plot_df <- data.frame(pca_res$x[, 1:2])
+  pca_plot_df$group <- sub_df$group
+  
+  p <- ggplot(pca_plot_df, aes(x = PC1, y = PC2, color = group)) +
+    geom_point(size = 4) +
+    theme_minimal() +
+    labs(title = paste("PCA für Zeitpunkt", tp), x = "PC1", y = "PC2") +
+    theme(text = element_text(size = 14))
+  
+  print(p)
+}
+```
+One PCA for three time points
+```{r}
+pca_res <- prcomp(exprs_t, scale. = TRUE)
+
+pca_df <- data.frame(pca_res$x[, 1:2])  
+pca_df$group <- sample_info$group
+pca_df$participant <- sample_info$participant
+pca_df$timepoint <- sample_info$timepoint
+
+pca_df_sub <- subset(pca_df, timepoint %in% c("T0", "T2", "T4"))
+
+ggplot(pca_df_sub, aes(x = PC1, y = PC2, color = timepoint, shape = group)) +
+  geom_point(size = 4) +
+  labs(
+    title = "PCA nur für T0, T2 und T4",
+    x = paste0("PC1 (", round(summary(pca_res)$importance[2,1]*100, 1), "% Var.)"),
+    y = paste0("PC2 (", round(summary(pca_res)$importance[2,2]*100, 1), "% Var.)")
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 18),
+    plot.title = element_text(size = 22, face = "bold", hjust = 0.5)
+  )
+```
+```{r}
+contrast_matrix <- makeContrasts(
+  T0 = Profi_T0 - Control_T0,  # FC > 0: protein more abundant in PRO
+  T1 = Profi_T1 - Control_T1,
+  T2 = Profi_T2 - Control_T2,
+  T3 = Profi_T3 - Control_T3,
+  T4 = Profi_T4 - Control_T4,
+  levels = design
+)
+```
+
+limma analysis
+```{r}
+fit <- lmFit(expr_mat, design)
+fit2 <- contrasts.fit(fit, contrast_matrix)
+fit2 <- eBayes(fit2)
+```
+
+Save results
+```{r}
+results_list <- list(
+  T0 = { df <- topTable(fit2, coef = "T0", number = Inf); 
+         df$ProteinID <- rownames(df); 
+         df },
+  T1 = { df <- topTable(fit2, coef = "T1", number = Inf); 
+         df$ProteinID <- rownames(df); 
+         df },
+  T2 = { df <- topTable(fit2, coef = "T2", number = Inf); 
+         df$ProteinID <- rownames(df); 
+         df },
+  T3 = { df <- topTable(fit2, coef = "T3", number = Inf); 
+         df$ProteinID <- rownames(df); 
+         df },
+  T4 = { df <- topTable(fit2, coef = "T4", number = Inf); 
+         df$ProteinID <- rownames(df); 
+         df }
+)
+
+
+write_xlsx(results_list, path = "limma_PROvsCTR_results.xlsx")
+```
+
+Generate Heatmap for significant proteins at T0
+```{r}
+sig_T0 <- results_list$T0 %>%
+  filter(adj.P.Val < 0.1) %>% #p values until 0.1!!! (no below 0.05)
+  pull(ProteinID)
+
+logFC_long <- lapply(names(results_list), function(tp) {
+  df <- results_list[[tp]] %>%
+    dplyr::select(ProteinID, logFC, adj.P.Val) %>%
+    mutate(Timepoint = tp)
+  return(df)
+}) %>% bind_rows()
+
+logFC_sig <- logFC_long %>% filter(ProteinID %in% sig_T0)
+
+logFC_wide <- logFC_sig %>%
+  dplyr::select(ProteinID, Timepoint, logFC) %>%
+  pivot_wider(names_from = Timepoint, values_from = logFC)
+
+heatmap_mat <- as.matrix(logFC_wide[,-1])
+rownames(heatmap_mat) <- logFC_wide$ProteinID
+
+```
+
+plot heatmap
+```{r}
+pheatmap(heatmap_mat,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         main = "logFC PRO/CTR PBMCs")
+```

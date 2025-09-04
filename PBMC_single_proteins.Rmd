@@ -1,0 +1,199 @@
+"R Script for the visualisation of single proteins during the intervention in PBMC samples.
+Output: Line plots, containing PRO and CTR"
+
+```{r}
+install.packages(c(
+  "tidyverse",
+  "writexl",
+  "readxl",
+  "openxlsx"
+))
+
+library(tidyverse)
+library(writexl)
+library(readxl)
+library(openxlsx)
+library(ggplot2)
+```
+###CTR###
+
+Load data from excel
+```{r}
+data <- read_xls("/Users/majaewen/Documents/Uni/6_Semester/Daten/PBMC_proteomics/T_test_Controls.xls", sheet = 1, range = "A1:CH8311")
+head(data)
+
+data_ordered <- data
+```
+
+```{r}
+timepoints <- as.character(data_ordered[2, ])
+subjects   <- as.character(data_ordered[4, ])
+time_num <- as.integer(sub("T", "", timepoints)) 
+order_idx <- order(time_num, subjects)
+data_ordered <- data[, order_idx]
+
+new_colnames <- paste0(subjects[order_idx], "_", timepoints[order_idx])
+colnames(data_ordered) <- new_colnames
+
+data_ordered <- data_ordered[ , -c(61:83, 85:86)]
+
+colnames(data_ordered)[61] <- "PG.Genes"
+```
+
+```{r}
+names(data_ordered) <- make.unique(names(data_ordered))
+```
+
+Enter target protein!
+```{r}
+protein <- "DHPS" #here!
+protein_row <- data_ordered %>% filter(PG.Genes == protein)
+if (nrow(protein_row) == 0) stop("Protein not found!")
+```
+
+```{r}
+long_df <- protein_row %>%
+  pivot_longer(
+    cols = -PG.Genes,
+    names_to = "Sample",
+    values_to = "Intensity"
+  ) %>%
+  separate(Sample, into = c("Proband", "Zeitpunkt"), sep = "_") %>%
+  mutate(Zeitpunkt = factor(Zeitpunkt, levels = paste0("T", 0:4)))
+
+```
+
+Calculate mean and standard deviation
+```{r}
+long_df <- long_df %>%
+  mutate(Intensity = as.numeric(Intensity)) 
+
+summary_df <- long_df %>%
+  group_by(Zeitpunkt) %>%
+  summarise(
+    mean_intensity = mean(Intensity, na.rm = TRUE),
+    sd_intensity = sd(Intensity, na.rm = TRUE),
+    n = n(),
+    sem_intensity = sd_intensity / sqrt(n)
+  )
+```
+
+
+```{r}
+ggplot(summary_df, aes(x = Zeitpunkt, y = mean_intensity, group = 1)) +
+  geom_ribbon(aes(ymin = mean_intensity - sem_intensity, ymax = mean_intensity + sem_intensity), fill = "green", alpha = 0.2) +
+  geom_line(color = "darkgreen", linewidth = 1.2) +
+  geom_point(color = "darkgreen", linewidth = 2) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = paste("Dynamics of", protein, "during acute exercise"),
+    y = "Intensity (mean ± SEM)",
+    x = "timepoint"
+  )
+```
+###PRO###
+
+Load data from excel
+```{r}
+data_PRO <- read_xls("/Users/majaewen/Documents/Uni/6_Semester/Daten/PBMC_proteomics/T_test_Profis.xls", sheet = 1, range = "A1:CF8311")
+head(data_PRO)
+
+
+data_ordered_PRO <- data_PRO
+```
+
+```{r}
+timepoints <- as.character(data_ordered_PRO[2, ])
+subjects   <- as.character(data_ordered_PRO[4, ])
+time_num <- as.integer(sub("T", "", timepoints)) 
+order_idx <- order(time_num, subjects)
+data_ordered_PRO <- data_PRO[, order_idx]
+
+new_colnames_PRO <- paste0(subjects[order_idx], "_", timepoints[order_idx])
+colnames(data_ordered_PRO) <- new_colnames_PRO
+```
+
+```{r}
+data_ordered_PRO <- data_ordered_PRO[ , -c(61:83)]
+
+colnames(data_ordered_PRO)[61] <- "PG.Genes"
+```
+
+```{r}
+names(data_ordered_PRO) <- make.unique(names(data_ordered_PRO))
+```
+
+```{r}
+protein_row_PRO <- data_ordered_PRO %>% filter(PG.Genes == protein)
+if (nrow(protein_row_PRO) == 0) stop("Protein not found!")
+
+```
+
+```{r}
+long_df_PRO <- protein_row_PRO %>%
+  pivot_longer(
+    cols = -PG.Genes,
+    names_to = "Sample",
+    values_to = "Intensity"
+  ) %>%
+  separate(Sample, into = c("Proband", "Zeitpunkt"), sep = "_") %>%
+  mutate(Zeitpunkt = factor(Zeitpunkt, levels = paste0("T", 0:4)))
+
+```
+
+Calculate mean and SEM
+```{r}
+long_df_PRO <- long_df_PRO %>%
+  mutate(Intensity = as.numeric(Intensity)) 
+
+summary_df_PRO <- long_df_PRO %>%
+  group_by(Zeitpunkt) %>%
+  summarise(
+    mean_intensity = mean(Intensity, na.rm = TRUE),
+    sd_intensity = sd(Intensity, na.rm = TRUE),
+    n = n(),
+    sem_intensity = sd_intensity / sqrt(n) 
+  )
+```
+
+```{r}
+summary_df_without <- summary_df_PRO[-6, ]
+ggplot(summary_df_without, aes(x = Zeitpunkt, y = mean_intensity, group = 1)) +
+  geom_ribbon(aes(ymin = mean_intensity - sem_intensity, ymax = mean_intensity + sem_intensity), fill = "green", alpha = 0.2) +
+  geom_line(color = "darkgreen", linewidth = 1.2) +
+  geom_point(color = "darkgreen", linewidth = 2) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = paste("Dynamics of", protein, "during acute exercise"),
+    y = "Intensity (mean ± SEM)",
+    x = "timepoints"
+  )
+```
+Merge both plots
+```{r}
+summary_df$group <- "CTR"
+
+summary_df_without$group <- "PRO"
+
+summary_combined <- bind_rows (summary_df, summary_df_without)
+```
+
+```{r}
+p <- ggplot(summary_combined, aes(x = Zeitpunkt, y = mean_intensity, color = group, group = group)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("CTR" = "blue", "PRO" = "red")) +
+  scale_fill_manual(values = c("CTR" = "blue", "PRO" = "red")) +
+  geom_ribbon(aes(ymin = mean_intensity - sem_intensity, ymax = mean_intensity + sem_intensity, fill = group), alpha = 0.2, color = NA) +
+  theme_minimal(base_size = 25) +
+  labs(
+    title = paste(protein),
+    x = "timepoint",
+    y = "Intensity (mean ± SEM)",
+    color = "group",
+    fill = "group"
+  )
+
+ggsave("DHPS_PBMC_not_z.png", plot = p, width = 8, height = 6)
+```
+
